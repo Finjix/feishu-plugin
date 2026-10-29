@@ -1,4 +1,4 @@
-# feishu
+# feishu-plugin
 
 飞书基础插件（Codex 插件，可被 ChatGPT/Codex 桌面版或 lark-agent 加载）。其他插件需要飞书时都调用它：
 

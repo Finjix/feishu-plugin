@@ -11,7 +11,7 @@ requirement-auto 和 gof-ad-audit 不再各自登录飞书，飞书的一切都�
    - `<A>/feishu/server/dist/feishu.mjs`：两个插件文件夹并排（lark-agent 的 `plugins/`）
    - `<A>/feishu/<版本>/server/dist/feishu.mjs`：Codex 的插件缓存，同一个 marketplace（lark-agent 装的都在 `.codex/plugins/cache/lark-agent/` 下）
    - `<A>/*/feishu/<版本>/server/dist/feishu.mjs`：Codex 的插件缓存，不同的 marketplace（桌面版各自添加的仓库）
-   - `<A>/feishu/plugins/feishu/server/dist/feishu.mjs`：开发时并排的仓库（`D:\project\feishu`）
+   - `<A>/feishu-plugin/plugins/feishu/server/dist/feishu.mjs`：开发时并排的仓库（`D:\project\feishu-plugin`）
 
 找不到就告诉用户需要先安装 feishu 插件，不要自己去连飞书。
 
