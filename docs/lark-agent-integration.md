@@ -8,7 +8,7 @@ lark-agent（`D:\project\lark-agent`）把 `plugins/` 下的插件文件夹在�
 
 ```bat
 start.cmd stop
-robocopy D:\project\feishu-plugin\plugins\feishu plugins\feishu /MIR
+robocopy D:\project\feishu-plugin\plugins\feishu plugins\feishu-plugin /MIR
 start.cmd
 ```
 
