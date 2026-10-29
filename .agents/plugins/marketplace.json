@@ -1,0 +1,20 @@
+{
+  "name": "feishu",
+  "interface": {
+    "displayName": "feishu"
+  },
+  "plugins": [
+    {
+      "name": "feishu",
+      "source": {
+        "source": "local",
+        "path": "./plugins/feishu"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

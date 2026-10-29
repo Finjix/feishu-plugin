@@ -1,0 +1,6 @@
+interface:
+  display_name: "读取飞书文档"
+  short_description: "把飞书新版文档、知识库、电子表格读成 Markdown 文件"
+  default_prompt: "Use $feishu-docs to read this Feishu document as Markdown."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "feishu",
+  "version": "1.0.0",
+  "description": "飞书基础插件：按用户隔离的飞书登录（设备授权，在无头浏览器里扫一次码完成），把飞书文档、知识库、电子表格读成 Markdown，并给其他插件（requirement-auto、gof-ad-audit）提供白名单内的飞书接口调用。",
+  "keywords": ["feishu", "lark", "login", "docs", "sdk"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "飞书",
+        "shortDescription": "飞书登录（扫码一次）、读取飞书文档为 Markdown；其他插件的飞书能力都经由它",
+        "longDescription": "飞书登录按用户隔离：设备授权在这个用户自己的无头浏览器里完成，用户用飞书手机端扫一次二维码即可，登录和浏览器的飞书网页登录态都只存在该用户自己的目录里。读取文档：把新版文档、知识库节点、电子表格读成 Markdown 文件（表格按页签成表）。其他插件（requirement-auto、gof-ad-audit）需要飞书时都调用这个插件：同一个登录、同一套白名单接口，用户只登录一次。",
+        "developerName": "feishu",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": [
+          "Use $feishu-login to check my Feishu login and, if it is missing, send me the QR code to scan.",
+          "Use $feishu-docs to read this Feishu document as Markdown."
+        ]
+      }
+    }
+  }
+}

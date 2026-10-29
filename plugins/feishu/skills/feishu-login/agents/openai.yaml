@@ -1,0 +1,6 @@
+interface:
+  display_name: "飞书登录"
+  short_description: "检查飞书登录；没登录时发二维码给用户扫码（扫一次，其他插件共用）"
+  default_prompt: "Use $feishu-login to check my Feishu login and, if it is missing, send me the QR code to scan."
+policy:
+  allow_implicit_invocation: true
