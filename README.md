@@ -56,7 +56,7 @@ docs/lark-agent-integration.md       放进 lark-agent
 
 ## 安装
 
-需要 Node.js 24+，别无其他依赖。扫码登录需要本机装有 Chrome 或 Edge（或用 `FEISHU_BROWSER` 指定浏览器路径，requirement-auto 也按它找，两边用同一个浏览器）；没有浏览器时把 `login start` 的链接发给用户在飞书里打开确认。
+需要 Node.js 24+，别无其他依赖。扫码登录需要本机装有 Chrome 或 Edge（或用 `FEISHU_BROWSER` 指定浏览器路径，requirement-auto 也按它找，两边用同一个浏览器）；没有浏览器时把 `login start` 的链接发给用户在飞书里打开确认。开了 Node 自己的代理（`NODE_USE_ENV_PROXY=1` 加 `HTTP_PROXY`）时，`NO_PROXY` 要包含 `127.0.0.1,localhost`：无头浏览器的调试接口在本机 127.0.0.1，那里的请求走了代理就连不上浏览器。
 
 ```bash
 codex plugin marketplace add <本仓库路径>
