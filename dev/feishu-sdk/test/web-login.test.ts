@@ -70,3 +70,20 @@ test('authorize needs a pending, still valid authorization and never opens the b
   assert.deepEqual([run.code, run.result!.status], [0, 'no_pending']);
   assert.equal(none.requests.length, 0);
 });
+
+test('a picture that may not be written is refused before the browser is left waiting for a scan; an old code is reaped even with nothing pending', async () => {
+  const paths = scratch();
+  const qr = web({ state: 'qr', png: Buffer.from('png-bytes') });
+  const taken = path.join(tempDir('fs-out-'), 'mine.png');
+  fs.writeFileSync(taken, 'the user’s own picture');
+  await assert.rejects(authorize(pending(), paths, qr, taken), /已存在/);
+  assert.equal(qr.requests.length, 0, 'the browser was never opened');
+  assert.equal(fs.readFileSync(taken, 'utf8'), 'the user’s own picture');
+
+  const old = path.join(tempDir('fs-out-'), 'old.png');
+  fs.writeFileSync(old, 'png');
+  fs.mkdirSync(path.dirname(paths.qr), { recursive: true });
+  fs.writeFileSync(paths.qr, JSON.stringify({ path: old, created_at: Date.now() - 20 * 60_000 }));
+  assert.equal((await authorize({ logged_in: true, app_configured: true, storage: 'host' }, paths, qr, undefined)).status, 'no_pending');
+  assert.ok(!fs.existsSync(old) && !fs.existsSync(paths.qr), 'the picture nobody scanned is gone, and so would be its browser');
+});

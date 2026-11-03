@@ -1,6 +1,6 @@
 # 其他插件怎么调用 feishu
 
-requirement-auto 和 gof-ad-audit 不再各自登录飞书，飞书的一切都经由这个插件：同一个登录、同一套白名单接口、同一个无头浏览器，用户只扫一次码。调用方只依赖下面这些约定，不 import 这个插件的代码，也不读它的文件。
+requirement-auto 不再自己登录飞书，飞书的一切都经由这个插件：同一个登录、同一套白名单接口、同一个无头浏览器，用户只扫一次码。（audit-auto 读审核群用机器人自己的应用身份，不调用这个插件。）调用方只依赖下面这些约定，不 import 这个插件的代码，也不读它的文件。
 
 ## 找到 feishu.mjs
 
@@ -8,7 +8,7 @@ requirement-auto 和 gof-ad-audit 不再各自登录飞书，飞书的一切都�
 
 1. 环境变量 `FEISHU_PLUGIN`：feishu.mjs 的绝对路径（开发和测试用）。
 2. 从调用方自己的脚本位置往上逐级找，每一级 `<A>` 试这几处（取第一个存在的；同一处有多个版本时取版本号最大的）：
-   - `<A>/feishu/server/dist/feishu.mjs`：两个插件文件夹并排（lark-agent 的 `plugins/`）
+   - `<A>/feishu/server/dist/feishu.mjs` 或 `<A>/feishu-plugin/server/dist/feishu.mjs`：两个插件文件夹并排（lark-agent 的 `plugins/` 里这个插件的文件夹叫 `feishu-plugin`；lark-agent 装好的插件在 Codex 的插件缓存里，按下一条找到）
    - `<A>/feishu/<版本>/server/dist/feishu.mjs`：Codex 的插件缓存，同一个 marketplace（lark-agent 装的都在 `.codex/plugins/cache/lark-agent/` 下）
    - `<A>/*/feishu/<版本>/server/dist/feishu.mjs`：Codex 的插件缓存，不同的 marketplace（桌面版各自添加的仓库）
    - `<A>/feishu-plugin/plugins/feishu/server/dist/feishu.mjs`：开发时并排的仓库（`D:\project\feishu-plugin`）
@@ -25,7 +25,7 @@ requirement-auto 和 gof-ad-audit 不再各自登录飞书，飞书的一切都�
 |---|---|---|
 | 程序（Node） | `feishu.mjs serve` | 每行一个请求 `{"id":…,"command":"…","input":{…}}`，每行一个回复 `{"id":…,"reply":{"ok":true,"data":…}}` 或 `{"ok":false,"error":{"kind","message","code?"}}`；回复按完成顺序、带请求的 id；输入结束、手上的请求都答完后退出。一个调用方进程起一个就够 |
 | 程序（任意语言） | `feishu.mjs bridge <命令>`，参数 JSON 走 stdin | 一行同样的回复；退出码 0 或 2 |
-| 技能（模型） | `login start/poll/status/logout/check`、`authorize [--qr]`、`doc fetch`、`doctor`、`info` | 一行 JSON；拒绝时 `{"status":"blocked","reason":…}`，退出码 2 |
+| 技能（模型） | `login start/poll/status/logout/check`、`authorize [--qr]`、`doc fetch`、`doctor`、`info` | 一行 JSON；拒绝时 `{"status":"blocked","reason":…}`，退出码 2（`login check` 不是 `ok`、`doc fetch` 没有 `saved` 时也是 2） |
 
 桥命令（`serve` 和 `bridge` 共用）见 `dev/feishu-sdk/src/bridge.ts` 的 `COMMANDS`：`info`、`auth-status`、`auth-verify`、`auth-login`、`auth-poll`、`auth-logout`、`auth-check-scopes`、`api-get`（只读白名单路径）、`sheets-revision`、`sheets-export`、`sheets-cells-set`（只有 `allow_overwrite:false`）、`sheets-create`、`sheets-dropdown-add`、`docx-blocks`、`docx-insert`、`docx-set-texts`。协议版本是 `info.bridge`（现为 `feishu-sdk-bridge/1`），调用方遇到不认识的版本应拒绝工作；只加命令和字段不升版本，改变已有命令的含义才升。
 
@@ -33,7 +33,7 @@ requirement-auto 和 gof-ad-audit 不再各自登录飞书，飞书的一切都�
 
 ## 浏览器
 
-`info` 的 `browser_profile` 是这个用户无头浏览器的资料目录，里面有飞书网页登录态（`authorize --qr` 扫码时留下）。网站登录走公司飞书单点登录的插件（requirement-auto 的 CLS）在这个目录上打开自己的页面，用户就不用再扫一次。同一时间只能有一个进程驱动它：锁是资料目录旁边的 `browser-profile.lock`（`{"pid","at"}`，进程结束或 15 分钟没续就算作废），浏览器的调试端口在资料目录里的 `DevToolsActivePort`。用到这个目录的插件必须用同样的锁（requirement-auto 的 `chromium.ts` 和这里的 `browser.ts` 是同一份实现，要改一起改），并且在持有锁的时候不要调用 feishu.mjs 里会打开浏览器的命令（`authorize`），否则两边互相等。
+`info` 的 `browser_profile` 是这个用户无头浏览器的资料目录，里面有飞书网页登录态（`authorize --qr` 扫码时留下）。网站登录走公司飞书单点登录的插件（requirement-auto 的 CLS）在这个目录上打开自己的页面，用户就不用再扫一次。同一时间只能有一个进程驱动它：锁是资料目录旁边的 `browser-profile.lock`（`{"pid","at","token"}`：持有者每 30 秒续一次 `at`，进程结束或 2 分钟没续就算作废、被接管；放锁时只删 `token` 是自己的那个），浏览器的调试端口在资料目录里的 `DevToolsActivePort`（端口上应答的不是文件里那个浏览器就算作废）。两边都按 `FEISHU_BROWSER`（requirement-auto 以前的 `REQUIREMENT_AUTO_BROWSER` 也认）找浏览器：同一个资料目录必须一直用同一个浏览器，否则飞书网页登录态带不过去。用到这个目录的插件必须用同样的锁（requirement-auto 的 `chromium.ts` 和这里的 `browser.ts` 是同一份实现，要改一起改），并且在持有锁的时候不要调用 feishu.mjs 里会打开浏览器的命令（`authorize`），否则两边互相等。
 
 ## 权限
 

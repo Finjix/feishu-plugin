@@ -10,10 +10,19 @@ import { tempDir } from './helpers/tmp.ts';
 import { clock } from './helpers/clock.ts';
 import { MockFeishu } from './helpers/mock-feishu.ts';
 
-test('the bridge version is the one the gof command line expects, and every command is known to the entry point', () => {
+test('the bridge version is the one the gof command line expects, and every command is known to the entry point', async () => {
   assert.equal(BRIDGE_VERSION, 'feishu-sdk-bridge/1');
   for (const name of INPUT_COMMANDS) assert.ok((COMMANDS as readonly string[]).includes(name), name);
   for (const name of ['info', 'auth-status', 'auth-logout']) assert.ok(!INPUT_COMMANDS.has(name), `${name} must not wait on stdin`);
+  // Each one reaches its own handling (none is an unknown command); nothing gets far enough to need Feishu, which is a closed port here.
+  const env = { LARK_AGENT_USER_DIR: tempDir('fs-br-'), FEISHU_APP_ID: 'cli_x', FEISHU_APP_SECRET: 'secret-000000' };
+  const nowhere = { open: 'http://127.0.0.1:9', accounts: 'http://127.0.0.1:9' };
+  try {
+    for (const name of COMMANDS) {
+      const reply = await runBridge(name, undefined, { env, endpoints: nowhere });
+      assert.ok(reply.ok || !reply.error.message.includes('未知命令'), name);
+    }
+  } finally { fs.rmSync(env.LARK_AGENT_USER_DIR, { recursive: true, force: true }); }
 });
 
 test('unknown commands and malformed arguments are refused, not guessed', async () => {

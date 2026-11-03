@@ -27,6 +27,8 @@ export class MockFeishu {
   writeReply: { status: number; body: unknown } | undefined;
   exportJob = [{ job_status: 1 }, { job_status: 0, file_token: 'ft1' }];
   rejectTokenOnce = false;
+  /** How many Open API calls in a row are turned down for too many requests. */
+  rateLimited = 0;
   /** More Open API answers for a test: the `data` for a path, or undefined to fall through to the routes below. */
   more: (pathname: string, query: URLSearchParams) => unknown = () => undefined;
   private counter = 0;
@@ -104,6 +106,7 @@ export class MockFeishu {
     // Everything below is an Open API call with a user access token.
     if (req.headers.authorization !== `Bearer ${this.access}`) return json(401, { code: 99991668, msg: 'invalid access token' });
     if (this.rejectTokenOnce) { this.rejectTokenOnce = false; return json(200, { code: 99991677, msg: 'token expired' }); }
+    if (this.rateLimited > 0) { this.rateLimited--; return json(429, { code: 99991400, msg: 'request trigger frequency limit' }); }
     if (pathname === '/open-apis/authen/v1/user_info') return json(200, { code: 0, data: { open_id: this.openId, name: this.name } });
     if (/\/sheets\/v2\/spreadsheets\/[^/]+\/metainfo$/.test(pathname)) return json(200, { code: 0, data: { properties: { revision: this.revision } } });
     if (pathname.endsWith('/tools/invoke_write')) {

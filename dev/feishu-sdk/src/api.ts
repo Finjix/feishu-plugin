@@ -11,9 +11,12 @@ const TOKEN = /^[A-Za-z0-9]{8,64}$/;
 const SHEET_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const A1 = /^[A-Za-z]{1,3}[0-9]{1,7}(:[A-Za-z]{1,3}[0-9]{1,7})?$/;
 const OCCUPIED = /non[- ]?empty|occupied|cannot overwrite|not allowed to overwrite|already (has|contains)|非空|已有内容|不为空|禁止覆盖/i;
-/** Feishu codes: the user token is invalid or expired (a renewal may fix it), and the permission is missing. */
+/** Feishu codes: the user token is invalid or expired (a renewal may fix it), the permission is missing, too many requests. */
 const TOKEN_REJECTED = new Set([99991668, 99991677]);
 const SCOPE_MISSING = new Set([99991679, 99991672]);
+const RATE_LIMITED = 99991400;
+/** A read turned down for too many requests is asked again this many times, a little later each time. */
+const READ_TRIES = 3;
 const MAX_WRITES = 100;
 /** A document read whole: larger ones are not edited here. */
 const MAX_DOC_BLOCKS = 50_000;
@@ -57,7 +60,7 @@ export class FeishuApi {
     this.sleep = sleep;
   }
 
-  private async send(call: Call, again = true): Promise<any> {
+  private async send(call: Call, again = true, attempt = 1): Promise<any> {
     const token = await this.auth.accessToken();
     let result: any;
     try {
@@ -71,25 +74,31 @@ export class FeishuApi {
         const body = e.response.data;
         // A stream body of an error response is not read: the status says enough.
         const parsed = body && typeof body === 'object' && !('pipe' in body) ? body : {};
-        return this.failure(call, parsed, e.response.status, again);
+        return this.failure(call, parsed, e.response.status, { again, attempt, token });
       }
       throw new BridgeError(call.write ? 'unknown_result' : 'network',
         call.write ? '飞书写入请求没有收到结果，写入可能已生效；必须回读核对，不可重发' : '无法连接飞书');
     }
     if (call.stream) return result;
-    if (result && typeof result === 'object' && typeof result.code === 'number' && result.code !== 0) return this.failure(call, result, 200, again);
+    if (result && typeof result === 'object' && typeof result.code === 'number' && result.code !== 0) return this.failure(call, result, 200, { again, attempt, token });
     return result && typeof result === 'object' && 'data' in result ? result.data : result;
   }
 
-  private async failure(call: Call, body: any, status: number, again: boolean): Promise<any> {
+  private async failure(call: Call, body: any, status: number, sent: { again: boolean; attempt: number; token: string }): Promise<any> {
     const code = typeof body?.code === 'number' ? body.code : undefined;
     const message = String(body?.msg ?? body?.message ?? body?.error_description ?? `HTTP ${status}`);
     if (code !== undefined && TOKEN_REJECTED.has(code)) {
-      if (again && !call.write) {
-        await this.auth.refresh(true);
+      // Feishu turns the token down before it looks at the request, so even a write did not happen and may go once more. The renewal
+      // is skipped when another call has renewed the token meanwhile (the stored one is no longer the one turned down).
+      if (sent.again) {
+        await this.auth.refresh(true, sent.token);
         return this.send(call, false);
       }
       throw new BridgeError('auth_required', '飞书登录已失效，请重新授权', code);
+    }
+    if (!call.write && (status === 429 || code === RATE_LIMITED) && sent.attempt < READ_TRIES) {
+      await this.sleep(1000 * sent.attempt);
+      return this.send(call, sent.again, sent.attempt + 1);
     }
     if (code !== undefined && SCOPE_MISSING.has(code)) throw new BridgeError('scope_missing', `飞书登录缺少调用所需的权限；请在应用后台开通并重新授权（${message}）`, code);
     if (call.write && OCCUPIED.test(message)) throw new BridgeError('occupied', '服务端拒绝写入非空目标', code);

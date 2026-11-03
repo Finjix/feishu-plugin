@@ -8,7 +8,7 @@ import { fetchDoc } from './docs.ts';
 import { Blocked, need, toPayload } from './errors.ts';
 import { migrateLegacy } from './legacy.ts';
 import { expectedOpenId, resolveDataPaths } from './paths.ts';
-import { authorize, realDeviceWeb, type DeviceWeb } from './web-login.ts';
+import { authorize, realDeviceWeb, signOutBrowser, type DeviceWeb } from './web-login.ts';
 
 /*
  * feishu.mjs, the plugin's one command line. Every command prints one line of JSON on stdout (`serve` one per request) and exits with 0,
@@ -17,7 +17,7 @@ import { authorize, realDeviceWeb, type DeviceWeb } from './web-login.ts';
  *   info | doctor                          what is configured; doctor also needs a login with every permission
  *   login start [--extra-scope <scope>]…   a device authorization: link and code (the link is for the QR below, not for the chat)
  *   authorize [--qr <file.png>]            complete it in this user's hidden browser: the sign-in QR for the user, then 【授权】
- *   login poll [--wait <s>] | status | logout | check
+ *   login poll [--wait <s>] | status | logout [--browser] | check
  *   doc fetch --url <link> --output <file.md> [--sheet <tab>]
  *   bridge <command>                       for other plugins: one bridge command, its JSON input on stdin (see bridge.ts)
  *   serve                                  for other plugins: one {"id","command","input"} per line on stdin, one {"id","reply"} per line out
@@ -39,11 +39,14 @@ function parse(args: string[], options: Record<string, { type: 'string' | 'boole
 /** The bridge's answer, or a refusal that carries its reason (already scrubbed of credentials by the bridge). */
 const bridged = (ctx: Context) => ({ env: ctx.env, ...(ctx.endpoints ? { endpoints: ctx.endpoints } : {}) });
 
-async function call(command: string, input: unknown, ctx: Context): Promise<any> {
-  const reply = await runBridge(command, input, bridged(ctx));
+function answer(reply: BridgeReply): any {
   if (reply.ok) return reply.data;
   const { kind, message } = reply.error;
   throw new Blocked(SHOWN.has(kind) ? message : `飞书接口调用失败（${kind}${reply.error.code !== undefined ? `，错误码 ${reply.error.code}` : ''}）：${message}`);
+}
+
+async function call(command: string, input: unknown, ctx: Context): Promise<any> {
+  return answer(await runBridge(command, input, bridged(ctx)));
 }
 
 /**
@@ -92,10 +95,25 @@ async function login(action: string, args: string[], ctx: Context): Promise<Resu
       const wait = parse(args, { wait: { type: 'string' } }).values.wait as string | undefined;
       const seconds = wait === undefined ? 40 : Number(wait);
       need(Number.isInteger(seconds) && seconds >= 0 && seconds <= 50, '--wait 必须在 0 到 50 秒之间');
-      return call('auth-poll', { wait_ms: seconds * 1000 }, ctx);
+      const reply = await runBridge('auth-poll', { wait_ms: seconds * 1000 }, bridged(ctx));
+      if (!reply.ok && reply.error.kind === 'identity_mismatch') {
+        // Somebody else is signed in to Feishu web in this user's hidden browser (they scanned the code): it pressed 【授权】 for them and
+        // would again at every login, so they are signed out of it.
+        const after = await signOutBrowser(resolveDataPaths(ctx.env)).then(
+          () => '浏览器里那个账号的飞书网页登录也已退出：重新运行 feishu.mjs login start 和 feishu.mjs authorize --qr，把新的二维码只发给用户本人扫',
+          (error: Error) => `浏览器里那个账号的飞书网页登录没能退出（${error.message}）：稍后运行 feishu.mjs login logout --browser`);
+        throw new Blocked(`${reply.error.message}。${after}`);
+      }
+      return answer(reply);
     }
     case 'status': parse(args, {}); return call('auth-status', undefined, ctx);
-    case 'logout': parse(args, {}); return call('auth-logout', undefined, ctx);
+    case 'logout': {
+      const browser = parse(args, { browser: { type: 'boolean' } }).values.browser === true;
+      const result = await call('auth-logout', undefined, ctx);
+      // --browser: the hidden browser's Feishu web session goes too (the next login shows a sign-in code again).
+      if (browser) await signOutBrowser(resolveDataPaths(ctx.env));
+      return { ...result, ...(browser ? { browser_signed_out: true } : {}) };
+    }
     case 'check': parse(args, {}); return checkLogin(ctx);
     default: throw new Blocked('login 需要 start、poll、status、logout 或 check');
   }
@@ -136,8 +154,11 @@ async function serve(ctx: Context): Promise<void> {
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line.trim()) continue;
-    let request: { id?: unknown; command?: unknown; input?: unknown };
-    try { request = JSON.parse(line); } catch { request = {}; }
+    let request: { id?: unknown; command?: unknown; input?: unknown } = {};
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) request = parsed;
+    } catch { /* not JSON: answered as an invalid request */ }
     const id = request.id;
     const job = (async () => {
       const reply: BridgeReply = typeof request.command === 'string'

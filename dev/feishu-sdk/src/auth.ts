@@ -240,9 +240,21 @@ export class FeishuAuth {
     return this.prompt(pending, false);
   }
 
+  /** Saves how this poll stands, unless the request was replaced meanwhile (a new `login start`): that one is not this poll's to change. */
+  private async keepPending(pending: PendingLogin): Promise<void> {
+    if ((await this.readPending())?.device_code === pending.device_code) await writeJsonAtomic(this.paths.login, pending);
+  }
+
+  /** This poll's request is over: it goes, unless a new one has taken its place meanwhile. */
+  private async dropPending(pending: PendingLogin): Promise<void> {
+    const current = await this.readPending();
+    if (!current || current.device_code === pending.device_code) await removeFile(this.paths.login);
+  }
+
   /** Waits (at most `waitMs`, never more than 50 s) for the user to confirm; stores the login when they do. */
   async pollLogin(waitMs = 40_000): Promise<PollResult> {
     const app = this.credentials();
+    const started = this.now();
     const pending = await this.readPending();
     if (!pending) {
       const token = await this.readToken();
@@ -254,7 +266,7 @@ export class FeishuAuth {
     const stillPending = (): PollResult => ({ state: 'pending', retry_after_s: Math.max(1, Math.ceil((pending.next_poll_at - this.now()) / 1000)), expires_in_s: expiresIn() });
 
     for (;;) {
-      if (this.now() >= pending.expires_at) { await removeFile(this.paths.login); return { state: 'expired' }; }
+      if (this.now() >= pending.expires_at) { await this.dropPending(pending); return { state: 'expired' }; }
       const wait = pending.next_poll_at - this.now();
       if (wait > 0) {
         if (this.now() + wait > deadline) return stillPending();
@@ -271,25 +283,30 @@ export class FeishuAuth {
       if (!reply || reply.status >= 500 || reply.status === 429 || (reply.status >= 400 && typeof reply.body?.error !== 'string')) {
         pending.interval_s = Math.min(MAX_INTERVAL_S, pending.interval_s + 1);
         pending.next_poll_at = this.now() + pending.interval_s * 1000;
-        await writeJsonAtomic(this.paths.login, pending);
+        await this.keepPending(pending);
         if (this.now() >= deadline) return stillPending();
         continue;
       }
       const { status, body } = reply;
       if (!body?.error && status < 400 && typeof body?.access_token === 'string' && body.access_token) {
-        return this.finishLogin(body);
+        return this.finishLogin(body, pending);
       }
       const error = typeof body?.error === 'string' ? body.error : '';
       if (error === 'authorization_pending' || error === 'slow_down') {
         if (error === 'slow_down') pending.interval_s = Math.min(MAX_INTERVAL_S, pending.interval_s + 5);
         pending.next_poll_at = this.now() + pending.interval_s * 1000;
-        await writeJsonAtomic(this.paths.login, pending);
+        await this.keepPending(pending);
         if (this.now() + pending.interval_s * 1000 > deadline) return stillPending();
         continue;
       }
-      await removeFile(this.paths.login);
+      await this.dropPending(pending);
       if (error === 'access_denied') return { state: 'denied' };
-      if (error === 'expired_token' || error === 'invalid_grant') return { state: 'expired' };
+      if (error === 'expired_token' || error === 'invalid_grant') {
+        // The code is good for one exchange: another poll of this same request may have just collected the login.
+        const token = await this.readToken().catch(() => undefined);
+        if (token && this.loggedIn(token) && token.granted_at >= started) return this.authorized(token);
+        return { state: 'expired' };
+      }
       if (error === 'invalid_client') throw new BridgeError('config', '飞书应用凭证无效，请检查 FEISHU_APP_ID / FEISHU_APP_SECRET');
       throw new BridgeError('api', `飞书授权失败：${describe(body, `HTTP ${status}`)}`);
     }
@@ -301,7 +318,7 @@ export class FeishuAuth {
     return result;
   }
 
-  private async finishLogin(body: any): Promise<PollResult> {
+  private async finishLogin(body: any, pending: PendingLogin): Promise<PollResult> {
     const app = this.credentials();
     const access = String(body.access_token);
     const refresh = typeof body.refresh_token === 'string' && body.refresh_token ? body.refresh_token : undefined;
@@ -315,7 +332,7 @@ export class FeishuAuth {
         break;
       } catch {
         if (attempt >= 3) {
-          await removeFile(this.paths.login);
+          await this.dropPending(pending);
           throw new BridgeError('api', '授权已完成，但无法读取授权账号信息，请重新发起授权');
         }
         await this.sleep(500 * (attempt + 1));
@@ -323,10 +340,10 @@ export class FeishuAuth {
     }
     const user = info?.data ?? info;
     const openId = typeof user?.open_id === 'string' ? user.open_id : '';
-    if (!openId) { await removeFile(this.paths.login); throw new BridgeError('api', '无法确认授权账号，请重新发起授权'); }
+    if (!openId) { await this.dropPending(pending); throw new BridgeError('api', '无法确认授权账号，请重新发起授权'); }
     if (this.expected && openId !== this.expected) {
       // The token is dropped unread: somebody else's account must not end up in this user's directory.
-      await removeFile(this.paths.login);
+      await this.dropPending(pending);
       throw new BridgeError('identity_mismatch', '授权的飞书账号与当前用户不是同一个人，已拒绝；请用本人账号重新授权');
     }
     const now = this.now();
@@ -338,7 +355,7 @@ export class FeishuAuth {
     if (typeof user?.name === 'string' && user.name) token.name = user.name;
     if (refresh) token.refresh_token = refresh;
     await withLock(this.paths.lock, () => writeJsonAtomic(this.paths.auth, token));
-    await removeFile(this.paths.login);
+    await this.dropPending(pending);
     return this.authorized(token);
   }
 
@@ -352,14 +369,18 @@ export class FeishuAuth {
     return this.refresh(false);
   }
 
-  /** Renews the token. The refresh token is single use, so this runs under a lock and checks again once it holds it. */
-  async refresh(force: boolean): Promise<string> {
+  /**
+   * Renews the token. The refresh token is single use, so this runs under a lock and checks again once it holds it. `force` renews a token
+   * Feishu turned down, `rejected`, however long it was meant to last, unless another call has replaced it by now.
+   */
+  async refresh(force: boolean, rejected?: string): Promise<string> {
     this.credentials();
     return withLock(this.paths.lock, async () => {
       const current = await this.readToken();
       if (!current) throw new BridgeError('auth_required', '尚未登录飞书，请先授权');
       // Somebody else renewed it while this process waited for the lock.
       if (!force && current.access_expires_at - SKEW_MS > this.now()) return current.access_token;
+      if (force && rejected !== undefined && current.access_token !== rejected && current.access_expires_at - SKEW_MS > this.now()) return current.access_token;
       if (!current.refresh_token || current.refresh_expires_at <= this.now()) {
         // A login that cannot be renewed is good until its access token really ends, not until it is nearly there.
         if (!force && !current.refresh_token && current.access_expires_at > this.now()) return current.access_token;

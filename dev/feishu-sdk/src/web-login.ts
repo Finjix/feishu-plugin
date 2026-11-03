@@ -1,9 +1,10 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import { findBrowser, openBrowser } from './browser.ts';
+import { findBrowser, lockProfile, openBrowser } from './browser.ts';
 import { approveConsent } from './consent.ts';
 import { Blocked, need } from './errors.ts';
 import type { AuthStatus } from './auth.ts';
-import { clearQr, reapStaleQr, writeQr } from './qr.ts';
+import { checkQrTarget, clearQr, closeBrowser, reapStaleQr, writeQr } from './qr.ts';
 import type { DataPaths } from './paths.ts';
 
 /*
@@ -139,13 +140,15 @@ export const realDeviceWeb: DeviceWeb = {
  * Either way `login poll` then collects the login.
  */
 export async function authorize(status: AuthStatus, paths: Pick<DataPaths, 'qr' | 'browserProfile'>, web: DeviceWeb, qrFile: string | undefined): Promise<Result> {
+  // A code nobody scanned in a long time goes first, its browser with it, whether or not its login is still pending.
+  await reapStaleQr(paths.qr, paths.browserProfile);
   const pending = status.pending_login;
   if (!pending || pending.expires_at <= Date.now()) {
     return { status: 'no_pending', message: status.logged_in ? '飞书已经登录，没有待完成的授权' : '没有待完成的飞书授权（或已过期）：先运行 feishu.mjs login start' };
   }
   const url = checkVerificationUrl(pending.verification_uri_complete, pending.user_code);
-  await reapStaleQr(paths.qr, paths.browserProfile);
-  if (qrFile !== undefined) need(/\.png$/i.test(qrFile), '二维码文件需要是 .png');
+  // Before the browser is left waiting for a scan: a picture that cannot be written would leave it running for nobody.
+  if (qrFile !== undefined) checkQrTarget(paths.qr, qrFile);
 
   const outcome = await web.drive({ url, mode: qrFile !== undefined ? 'start' : 'finish', profileDir: paths.browserProfile });
   switch (outcome.state) {
@@ -153,7 +156,11 @@ export async function authorize(status: AuthStatus, paths: Pick<DataPaths, 'qr' 
       clearQr(paths.qr);
       return { status: 'approved', message: '已在浏览器里点了【授权】；现在运行 feishu.mjs login poll 取得登录' };
     case 'qr': {
-      const file = writeQr(paths.qr, path.resolve(qrFile!), outcome.png);
+      let file: string;
+      try { file = writeQr(paths.qr, path.resolve(qrFile!), outcome.png); } catch (error) {
+        await closeBrowser(paths.browserProfile).catch(() => undefined);
+        throw error;
+      }
       return {
         status: 'qr_ready', qr_file: file,
         message: '二维码已生成。把它发给用户，请其用飞书手机端扫码并在手机上确认（这一次扫码同时让这个浏览器登录飞书网页，之后用到它的插件不会再要求扫码）；几分钟后失效，失效就重新运行本命令。用户说已确认后运行 feishu.mjs authorize（不带 --qr）',
@@ -164,4 +171,17 @@ export async function authorize(status: AuthStatus, paths: Pick<DataPaths, 'qr' 
     case 'stuck':
       return { status: 'stuck', where: outcome.where, message: '页面既不是扫码页也不是授权页，或【授权】点了没反应；运行 feishu.mjs login poll 看是否已授权，没有则重新运行 --qr' };
   }
+}
+
+/**
+ * Signs the hidden browser out of Feishu web: its profile goes, with the session of whoever scanned, so the next `authorize --qr` shows a
+ * fresh sign-in code. Needed when that was somebody else: the browser would otherwise press 【授权】 for them at every login.
+ */
+export async function signOutBrowser(paths: Pick<DataPaths, 'qr' | 'browserProfile'>): Promise<void> {
+  const release = await lockProfile(paths.browserProfile);
+  try {
+    await closeBrowser(paths.browserProfile);
+    fs.rmSync(paths.browserProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    clearQr(paths.qr);
+  } finally { release(); }
 }

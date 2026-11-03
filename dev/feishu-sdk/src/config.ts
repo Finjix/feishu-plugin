@@ -15,7 +15,7 @@ export const FEISHU: Endpoints = { open: 'https://open.feishu.cn', accounts: 'ht
 
 /**
  * What a login is asked for, the needs of every plugin that calls this one put together: read wiki nodes, documents and sheets
- * (gof-ad-audit, requirement-auto), export workbooks and append to the progress sheet (requirement-auto). A plugin that needs another
+ * (requirement-auto), export workbooks and append to the progress sheet (requirement-auto). A plugin that needs another
  * permission adds it here, so that one login serves them all.
  */
 export const REQUIRED_SCOPES: readonly string[] = [

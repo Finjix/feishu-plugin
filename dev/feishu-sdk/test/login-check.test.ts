@@ -122,3 +122,28 @@ test('login check: a login without every permission is reported with what is mis
     assert.deepEqual([partial.code, partial.result!.status, partial.result!.missing_scopes], [2, 'scopes_missing', REQUIRED_SCOPES.slice(2)]);
   } finally { await mock.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a login approved for somebody else signs the hidden browser out of Feishu web, so the next code is a fresh one; logout --browser does too', async () => {
+  const mock = await new MockFeishu().start();
+  const dir = tempDir('fs-chk-');
+  try {
+    const env = { LARK_AGENT_USER_DIR: dir, LARK_AGENT_USER_OPEN_ID: 'ou_bob', FEISHU_APP_ID: mock.appId, FEISHU_APP_SECRET: mock.appSecret };
+    const ctx = { env, endpoints: mock.endpoints };
+    const profile = resolveDataPaths(env).browserProfile;
+    assert.equal((await main(['login', 'start'], ctx)).code, 0);
+    // Alice scanned Bob's code: the browser is signed in to Feishu web as her, and pressed 【授权】 for her.
+    fs.mkdirSync(profile, { recursive: true });
+    fs.writeFileSync(`${profile}/Cookies`, 'alice');
+    mock.deviceScript = ['issue'];
+    const poll = await main(['login', 'poll', '--wait', '10'], ctx);
+    assert.deepEqual([poll.code, poll.result!.status], [2, 'blocked']);
+    assert.match(poll.result!.reason, /不是同一个人[\s\S]*网页登录也已退出/);
+    assert.ok(!fs.existsSync(profile), 'her session is gone from his browser');
+    assert.ok(!fs.existsSync(resolveDataPaths(env).auth), 'and her token was never stored');
+
+    fs.mkdirSync(profile, { recursive: true });
+    const out = await main(['login', 'logout', '--browser'], ctx);
+    assert.deepEqual([out.code, out.result!.browser_signed_out], [0, true]);
+    assert.ok(!fs.existsSync(profile));
+  } finally { await mock.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

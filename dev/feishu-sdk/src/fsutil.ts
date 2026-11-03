@@ -55,12 +55,21 @@ export async function removeFile(file: string): Promise<void> {
 
 export interface LockOptions { timeoutMs?: number; staleMs?: number; pollMs?: number }
 
+const alive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+};
+/** Whether the process that took this lock has ended (one still writing it, without a pid yet, has not). */
+const holderGone = (text: string): boolean => {
+  try { const { pid } = JSON.parse(text) as { pid?: unknown }; return typeof pid === 'number' && pid > 0 && !alive(pid); } catch { return false; }
+};
+
 /**
- * A lock file created exclusively. A lock nobody renewed for `staleMs` is taken over; the takeover goes through a rename so that
- * of several waiters seeing the same dead lock only one wins it.
+ * A lock file created exclusively. A lock whose process has ended, or that is older than `staleMs` (its process id may have gone to
+ * another process by then), is taken over; the takeover goes through a rename so that of several waiters seeing the same dead lock only one
+ * wins it. A waiter waits longer than a lock takes to go stale, so that it can take over a dead one.
  */
 export async function withLock<T>(file: string, body: () => Promise<T>, options: LockOptions = {}): Promise<T> {
-  const { timeoutMs = 30_000, staleMs = 60_000, pollMs = 40 } = options;
+  const { timeoutMs = 90_000, staleMs = 60_000, pollMs = 40 } = options;
   await fs.mkdir(path.dirname(file), { recursive: true });
   const deadline = Date.now() + timeoutMs;
   const owner = randomBytes(8).toString('hex');
@@ -76,18 +85,22 @@ export async function withLock<T>(file: string, body: () => Promise<T>, options:
     }
     try {
       const age = Date.now() - (await fs.stat(file)).mtimeMs;
-      if (age > staleMs) {
+      const text = await fs.readFile(file, 'utf8');
+      if (age > staleMs || holderGone(text)) {
         const claimed = `${file}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
         const taken = await fs.rename(file, claimed).then(() => true, () => false);
         if (taken) {
-          // The lock may have been renewed by its holder between the check and the rename: then it is not ours to take.
-          const live = Date.now() - (await fs.stat(claimed).then(s => s.mtimeMs, () => 0)) <= staleMs;
-          if (live) await fs.rename(claimed, file).catch(() => fs.rm(claimed, { force: true }).catch(() => {}));
+          // A lock taken afresh between the check and the rename is not the one found dead: it goes back.
+          const moved = await fs.readFile(claimed, 'utf8').catch(() => '');
+          if (moved !== text) await fs.rename(claimed, file).catch(() => fs.rm(claimed, { force: true }).catch(() => {}));
           else await fs.rm(claimed, { force: true }).catch(() => {});
+          continue;
         }
-        continue;
       }
-    } catch { continue; } // released between the two checks
+    } catch {
+      // Released between the checks: taken at once. One that is there but cannot be read is waited on like a held lock.
+      if (!await fs.stat(file).then(() => true, () => false)) continue;
+    }
     if (Date.now() > deadline) throw new BridgeError('network', '另一个进程正在刷新飞书登录，等待超时，请稍后重试');
     await sleep(pollMs);
   }

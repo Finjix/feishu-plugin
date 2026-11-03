@@ -29,9 +29,13 @@ export function inline(elements: unknown): string {
       if (!text.trim()) return text;
       if (style.inline_code) text = `\`${text}\``;
       else {
-        if (style.bold) text = `**${text}**`;
-        if (style.italic) text = `*${text}*`;
-        if (style.strikethrough) text = `~~${text}~~`;
+        // The marks go round the words, not the spaces beside them: Markdown reads "** 3 亿 **" as plain asterisks.
+        const [, lead, words, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text)!;
+        let marked = words!;
+        if (style.bold) marked = `**${marked}**`;
+        if (style.italic) marked = `*${marked}*`;
+        if (style.strikethrough) marked = `~~${marked}~~`;
+        text = `${lead}${marked}${trail}`;
       }
       if (style.link?.url) text = `[${text}](${decode(String(style.link.url))})`;
       return text;
@@ -66,7 +70,7 @@ export function docxToMarkdown(blocks: Obj[]): string {
     const type = Number(block.block_type);
     const body = block[BODY[type] ?? ''] ?? {};
     const text = inline(body.elements);
-    const nested = (prefix: string) => children(block).flatMap(child => render(child, prefix));
+    const nested = (prefix: string) => sequence(children(block), prefix);
     if (HEADINGS[type]) return [`${'#'.repeat(HEADINGS[type])} ${text}`.trimEnd(), '', ...nested(indent)];
     switch (type) {
       case 2: return [...(text.trim() ? [`${indent}${text}`, ...(indent ? [] : [''])] : []), ...nested(indent)];
@@ -107,10 +111,21 @@ export function docxToMarkdown(blocks: Obj[]): string {
     }
   };
 
-  // List items are written line after line; a blank line closes a run of them.
+  // List items are written line after line; a blank line closes a run of them before what follows (in a callout or a quote too), or that
+  // would read as more of the last item.
+  function sequence(blocks: Obj[], indent: string): string[] {
+    return blocks.flatMap((block, i) => [...render(block, indent), ...(isList(block) && blocks[i + 1] && !isList(blocks[i + 1]) ? [''] : [])]);
+  }
   const isList = (block: Obj | undefined) => [12, 13, 17].includes(Number(block?.block_type));
-  const top = children(page);
-  const out = top.flatMap((block, i) => [...render(block, ''), ...(isList(block) && !isList(top[i + 1]) ? [''] : [])]);
+  const out = sequence(children(page), '');
+  // Blank lines in a row become one, except in a code block, where they are the code's own.
+  const lines: string[] = [];
+  let code = false;
+  for (const line of out) {
+    if (line === '```') code = !code;
+    else if (!code && line === '' && lines.at(-1) === '') continue;
+    lines.push(line);
+  }
   const title = inline(page.page?.elements).trim();
-  return `${title ? `# ${title}\n\n` : ''}${out.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
+  return `${title ? `# ${title}\n\n` : ''}${lines.join('\n').trim()}\n`;
 }

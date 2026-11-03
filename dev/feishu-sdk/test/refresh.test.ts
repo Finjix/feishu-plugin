@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { FeishuAuth } from '../src/auth.ts';
 import { withLock } from '../src/fsutil.ts';
@@ -59,5 +59,10 @@ test('the lock is exclusive, released after use, and a dead one is taken over', 
 
     fs.writeFileSync(file, '{"pid":0}');
     await assert.rejects(() => withLock(file, async () => 'never', { timeoutMs: 150, staleMs: 60_000 }), (e: { kind?: string }) => e.kind === 'network');
+
+    // Left by a process that has ended (killed while renewing, say): taken over at once, not only once it has gone stale.
+    const ended = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    fs.writeFileSync(file, JSON.stringify({ pid: Number(ended.stdout), at: Date.now(), owner: 'gone' }));
+    assert.equal(await withLock(file, async () => 'took over', { timeoutMs: 500, staleMs: 60_000 }), 'took over');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

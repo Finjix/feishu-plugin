@@ -1,6 +1,6 @@
 # 放进 lark-agent
 
-lark-agent（`D:\project\lark-agent`）把 `plugins/` 下的插件文件夹在启动时装进它自己的 Codex。feishu 是其他插件的基础：requirement-auto 和 gof-ad-audit 的飞书登录和飞书读写都经由它，所以它和它们一起放。
+lark-agent（`D:\project\lark-agent`）把 `plugins/` 下的插件文件夹在启动时装进它自己的 Codex。feishu 是其他插件的基础：requirement-auto 的飞书登录和飞书读写都经由它，所以它和 requirement-auto 一起放（audit-auto 不用它）。
 
 ## 怎么放
 

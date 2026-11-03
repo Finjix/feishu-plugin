@@ -39,3 +39,17 @@ test('bridge runs one command with its input from stdin; human commands print on
   const shared = spawnSync(process.execPath, [ENTRY, 'info'], { env: { ...process.env, LARK_AGENT_USER_OPEN_ID: 'ou_x', LARK_AGENT_USER_DIR: '' }, encoding: 'utf8' });
   assert.equal(shared.status, 2, 'a user named without a directory is refused, not served from a shared folder');
 });
+
+test('a line that is JSON but no request (null, a list) is answered as an invalid request, and serve goes on', async () => {
+  const dir = tempDir('fs-serve-');
+  const child = spawn(process.execPath, [ENTRY, 'serve'], { env: envFor(dir), stdio: ['pipe', 'pipe', 'inherit'] });
+  let out = '';
+  child.stdout.on('data', chunk => { out += chunk; });
+  const ended = new Promise<number | null>(resolve => child.on('close', resolve));
+  child.stdin.end(`null\n[1]\n${JSON.stringify({ id: 9, command: 'auth-status' })}\n`);
+  assert.equal(await ended, 0);
+  const replies = out.trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(replies.length, 3);
+  assert.equal(replies.filter(r => !r.reply.ok && r.reply.error.kind === 'invalid_request').length, 2);
+  assert.ok(replies.some(r => r.id === 9 && r.reply.ok));
+});

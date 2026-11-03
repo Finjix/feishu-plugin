@@ -3,10 +3,10 @@
 飞书基础插件（Codex 插件，可被 ChatGPT/Codex 桌面版或 lark-agent 加载）。其他插件需要飞书时都调用它：
 
 - **登录**（技能 `feishu-login`）：设备授权，在这个用户自己的**无头浏览器**里完成，用户用飞书手机端扫一次二维码。登录按用户隔离存放，令牌不出现在任何输出里。这次扫码同时让浏览器登录飞书网页，用这个浏览器的插件（requirement-auto 的 CLS 单点登录、进度表截图）不用再扫码。
-- **读文档**（技能 `feishu-docs`）：把新版文档、知识库节点、电子表格读成 Markdown 文件（表格按页签成表，第一列是行号）。gof-ad-audit 读脚本就用它。
+- **读文档**（技能 `feishu-docs`）：把新版文档、知识库节点、电子表格读成 Markdown 文件（表格按页签成表，第一列是行号）。
 - **给其他插件的接口**：`feishu.mjs serve` / `feishu.mjs bridge <命令>`，只开放白名单里的读取、导出和防覆盖写入（`allow_overwrite:false`）。约定见 [docs/for-plugins.md](docs/for-plugins.md)。
 
-调用它的插件：[requirement-auto](https://github.com/Finjix/requirement-auto)（读写创意进度表、需求文档、CLS 登录共用浏览器）、[gof-ad-audit](https://github.com/Finjix/gof-ad-audit)（读飞书脚本）。它们以前各自登录（requirement-auto 自带一套飞书 SDK 层，gof-ad-audit 用 lark-cli），现在都只经由这里。
+调用它的插件：[requirement-auto](https://github.com/Finjix/requirement-auto)（读写创意进度表、需求文档、CLS 登录共用浏览器），它以前自带一套飞书 SDK 层，现在只经由这里。[audit-auto](https://github.com/Finjix/audit-auto)（以前叫 gof-ad-audit）不再读飞书脚本，读审核群用的是机器人自己的应用身份，不调用这个插件。
 
 ## 目录
 
@@ -26,15 +26,15 @@ docs/lark-agent-integration.md       放进 lark-agent
 
 ## 命令
 
-`feishu` = `node plugins/feishu/server/dist/feishu.mjs`，每个命令输出一行 JSON，拒绝或不 ok 时退出码 2。
+`feishu` = `node plugins/feishu/server/dist/feishu.mjs`，每个命令输出一行 JSON。拒绝时是 `{"status":"blocked","reason":…}`，退出码 2；`login check` 不是 `ok`、`doc fetch` 没有 `saved` 时也是 2；其余命令的结果看 `status` / `state`，退出码 0。
 
 | 命令 | 做什么 |
 |---|---|
 | `login check` | 用保存的登录真实地问一次飞书（令牌被拒时续期一次，也让闲置的登录续上）：`ok`、`login_required`、`identity_mismatch`、`scopes_missing`、`unreachable`、`blocked`，要登录时带 `todo` |
 | `login start [--extra-scope s]…` | 发起设备授权，返回授权链接和验证码 |
 | `authorize [--qr x.png]` | 带 `--qr`：在无头浏览器里打开授权链接，浏览器没登录飞书网页就把扫码页截成 PNG（发给用户扫），已登录就直接点【授权】。不带：用户扫码后点【授权】 |
-| `login poll [--wait 秒]` | 收登录（最多等 50 秒） |
-| `login status` / `login logout` | 只读本地记录 / 退出 |
+| `login poll [--wait 秒]` | 收登录（最多等 50 秒）；授权的不是本人就拒绝，并让无头浏览器退出那个人的飞书网页登录，下一次授权会重新出二维码 |
+| `login status` / `login logout [--browser]` | 只读本地记录 / 退出（`--browser`：无头浏览器的飞书网页登录也退出） |
 | `doc fetch --url <链接> --output x.md [--sheet 页签]` | 读成 Markdown，写新文件（不覆盖） |
 | `doctor` / `info` | 自检 / 配置和数据位置（不含任何密钥） |
 | `bridge <命令>` / `serve` | 给其他插件：见 [docs/for-plugins.md](docs/for-plugins.md) |
@@ -56,7 +56,7 @@ docs/lark-agent-integration.md       放进 lark-agent
 
 ## 安装
 
-需要 Node.js 24+，别无其他依赖。扫码登录需要本机装有 Chrome 或 Edge（或用 `FEISHU_BROWSER` 指定浏览器路径）；没有浏览器时把 `login start` 的链接发给用户在飞书里打开确认。
+需要 Node.js 24+，别无其他依赖。扫码登录需要本机装有 Chrome 或 Edge（或用 `FEISHU_BROWSER` 指定浏览器路径，requirement-auto 也按它找，两边用同一个浏览器）；没有浏览器时把 `login start` 的链接发给用户在飞书里打开确认。
 
 ```bash
 codex plugin marketplace add <本仓库路径>

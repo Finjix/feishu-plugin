@@ -41,6 +41,18 @@ test('a docx becomes Markdown that keeps its text and structure', () => {
   ].join('\n'));
 });
 
+test('a list in a callout ends before what follows it, blank lines in code stay, and marks go round the words, not their spaces', () => {
+  const blocks: Obj[] = [
+    { block_id: 'page', block_type: 1, page: { elements: [] }, children: ['callout', 'code', 'p'] },
+    { block_id: 'callout', block_type: 19, callout: {}, children: ['li', 'after'] },
+    text('li', 12, 'bullet', [run('一条')]),
+    text('after', 2, 'text', [run('之后的段落')]),
+    text('code', 14, 'code', [run('a = 1\n\n\nb = 2')]),
+    text('p', 2, 'text', [run('全球'), run(' 3 亿 ', { bold: true }), run('玩家')]),
+  ];
+  assert.equal(docxToMarkdown(blocks), ['> - 一条', '>', '> 之后的段落', '>', '', '```', 'a = 1', '', '', 'b = 2', '```', '', '全球 **3 亿** 玩家', ''].join('\n'));
+});
+
 test('only Feishu document links are read, and an old-style doc is named as such', () => {
   assert.deepEqual(parseLink('https://centurygames.feishu.cn/wiki/CSy2dZ3XvoLDmBxolPXcNbtunuc'), { kind: 'wiki', token: 'CSy2dZ3XvoLDmBxolPXcNbtunuc', sheet: null });
   assert.deepEqual(parseLink('https://x.feishu.cn/sheets/shtABCDEFGH?sheet=abc'), { kind: 'sheets', token: 'shtABCDEFGH', sheet: 'abc' });
@@ -102,8 +114,10 @@ test('doc fetch: a sheet is saved tab by tab, the linked tab only when the link 
       '# 口播表', '', '## 口播', '', '| 行 | A | B |', '| --- | --- | --- |', '| 1 | 时间 | 口播 |', '| 3 | 00:01 | 零氪也能玩 |', '',
       '## 分镜', '', '| 行 | A |', '| --- | --- |', '| 1 | 冰原 |', '',
     ].join('\n'));
+    assert.ok(mock.requests('/open-apis/sheets/v2/spreadsheets/shtABCDEFGH/values_batch_get').every(r => /valueRenderOption=FormattedValue/.test(r.url)), 'numbers as the cells show them');
     const one = path.join(tempDir('fs-out-'), 'one.md');
     await main(['doc', 'fetch', '--url', 'https://centurygames.feishu.cn/sheets/shtABCDEFGH?sheet=s2', '--output', one], ctx);
+    assert.match(fs.readFileSync(one, 'utf8'), /## 分镜\n\n\| 行 \| A \|/, 'the linked tab is there');
     assert.doesNotMatch(fs.readFileSync(one, 'utf8'), /口播 \|/);
 
     const nobody = await main(['doc', 'fetch', '--url', 'https://centurygames.feishu.cn/sheets/shtABCDEFGH', '--output', path.join(tempDir('fs-out-'), 'x.md')],

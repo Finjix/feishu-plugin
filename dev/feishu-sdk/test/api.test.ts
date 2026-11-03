@@ -122,11 +122,35 @@ test('a write that gets no answer is an unknown result, and it is not resent', a
   } finally { await done(); }
 });
 
-test('a token rejected during a write is not retried', async () => {
+test('a token turned down during a write is renewed and the write sent once more: Feishu turns a token down before it looks at the request', async () => {
   const { api, mock, done } = await setup();
   try {
     mock.rejectTokenOnce = true;
-    await assert.rejects(() => api.cellsSet(TOKEN, [write()]), (e: BridgeError) => e.kind === 'auth_required');
+    assert.deepEqual(await api.cellsSet(TOKEN, [write()]), { ok: true });
+    assert.equal(mock.requests('/open-apis/sheet_ai').length, 2);
+    assert.equal(mock.refreshCount, 1);
+  } finally { await done(); }
+});
+
+test('reads turned down together cause one renewal, and each of them goes through', async () => {
+  const { api, mock, done } = await setup();
+  try {
+    mock.revokeAccess();
+    assert.deepEqual(await Promise.all(Array.from({ length: 4 }, () => api.revision(TOKEN))), [7, 7, 7, 7]);
+    assert.equal(mock.refreshCount, 1, 'the others found the token renewed already');
+  } finally { await done(); }
+});
+
+test('a read turned down for too many requests is asked again a little later; a write is not', async () => {
+  const { api, mock, done } = await setup();
+  try {
+    mock.rateLimited = 2;
+    assert.equal(await api.revision(TOKEN), 7);
+    assert.equal(mock.requests('/open-apis/sheets/v2').length, 3);
+    mock.rateLimited = 5;
+    await assert.rejects(() => api.revision(TOKEN), (e: BridgeError) => e.kind === 'api');
+    mock.rateLimited = 1;
+    await assert.rejects(() => api.cellsSet(TOKEN, [write()]), (e: BridgeError) => e.kind === 'api');
     assert.equal(mock.requests('/open-apis/sheet_ai').length, 1);
   } finally { await done(); }
 });

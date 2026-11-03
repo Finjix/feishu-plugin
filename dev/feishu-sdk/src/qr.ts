@@ -19,12 +19,18 @@ export function readQr(file: string): QrRecord | undefined {
   } catch { return undefined; }
 }
 
-/** Writes the picture. A file that is not the previous picture is never overwritten. */
-export function writeQr(recordFile: string, target: string, png: Buffer, now: () => number = Date.now): string {
+/** Whether the picture may go to this file: a new one, or the previous picture. Asked before a browser is left waiting for a scan. */
+export function checkQrTarget(recordFile: string, target: string): void {
   const file = path.resolve(target);
   if (!/\.png$/i.test(file)) throw new Blocked('二维码文件需要是 .png');
+  if (fs.existsSync(file) && readQr(recordFile)?.path !== file) throw new Blocked('这个文件已存在，不覆盖；换一个新的 .png 文件名');
+}
+
+/** Writes the picture. A file that is not the previous picture is never overwritten. */
+export function writeQr(recordFile: string, target: string, png: Buffer, now: () => number = Date.now): string {
+  checkQrTarget(recordFile, target);
+  const file = path.resolve(target);
   const previous = readQr(recordFile);
-  if (fs.existsSync(file) && previous?.path !== file) throw new Blocked('这个文件已存在，不覆盖；换一个新的 .png 文件名');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, png);
   if (previous && previous.path !== file) fs.rmSync(previous.path, { force: true });
@@ -40,11 +46,16 @@ export function clearQr(recordFile: string): void {
   fs.rmSync(recordFile, { force: true });
 }
 
+/** Closes the hidden browser of this profile if one is running (left waiting for a scan, say). */
+export async function closeBrowser(profileDir: string): Promise<void> {
+  const browser = await attachBrowser(profileDir);
+  if (browser) await browser.close();
+}
+
 /** A code nobody scanned in a long time: close the hidden browser waiting for it and remove the picture. */
 export async function reapStaleQr(recordFile: string, profileDir: string, now: () => number = Date.now): Promise<void> {
   const record = readQr(recordFile);
   if (!record || now() - record.created_at < QR_MAX_AGE_MS) return;
-  const browser = await attachBrowser(profileDir);
-  if (browser) await browser.close();
+  await closeBrowser(profileDir);
   clearQr(recordFile);
 }

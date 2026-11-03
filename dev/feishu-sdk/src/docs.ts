@@ -69,8 +69,9 @@ async function sheetMarkdown(api: FeishuApi, target: Target, wanted: string | un
     const rows = Math.min(Number(tab.grid_properties?.row_count) || 1, MAX_ROWS);
     const cols = Math.min(Number(tab.grid_properties?.column_count) || 1, MAX_COLS);
     if (Number(tab.grid_properties?.row_count) > rows || Number(tab.grid_properties?.column_count) > cols) more = true;
+    // Numbers as the cells show them too (25%, not 0.25), not only dates.
     const data = await api.get(`/open-apis/sheets/v2/spreadsheets/${target.token}/values_batch_get`,
-      { ranges: `${tab.sheet_id}!A1:${column(cols)}${rows}`, dateTimeRenderOption: 'FormattedString' });
+      { ranges: `${tab.sheet_id}!A1:${column(cols)}${rows}`, valueRenderOption: 'FormattedValue', dateTimeRenderOption: 'FormattedString' });
     const values: unknown[][] = data?.valueRanges?.[0]?.values ?? [];
     const text = (Array.isArray(values) ? values : []).map(row => (Array.isArray(row) ? row : []).map(cell => cellShown(cell).trim()));
     // Empty rows and the empty columns on the right are left out; the rows that remain keep their sheet row number in the first column.
